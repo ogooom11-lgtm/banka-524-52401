@@ -1,1593 +1,1141 @@
-import 'dart:convert';
-
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
-import '../../models/app_user.dart';
 import '../../providers/bank_provider.dart';
+import '../../utils/formatters.dart';
+import '../../widgets/animated_widgets.dart';
+import '../../widgets/app_dialogs.dart';
 import '../../widgets/common.dart';
+import '../dialogs/import_export_dialogs.dart';
+import '../dialogs/user_dialogs.dart';
 
+/// Kullanıcı yönetimi: arama, filtreleme, toplu işlemler ve tam düzenleme.
 class UsersTab extends StatefulWidget {
   const UsersTab({super.key});
 
   @override
-  State<UsersTab> createState() => _UsersTabState();
+  State<UsersTab> createState() => UsersTabState();
 }
 
-class _UsersTabState extends State<UsersTab> {
-  final _nameSearch = TextEditingController();
-  final _companySearch = TextEditingController();
-  final _titleSearch = TextEditingController();
+class UsersTabState extends State<UsersTab> {
+  final _nameQuery = TextEditingController();
+  final _companyQuery = TextEditingController();
+  final _titleQuery = TextEditingController();
+
+  final Set<String> _selected = <String>{};
+  String _sortBy = 'name';
+  bool _ascending = true;
+  UserRole? _roleFilter;
+  int _statusFilter = 0; // 0 tümü, 1 aktif, 2 pasif
+  String? _companyFilter;
+  int _visible = 60;
+
+  final FocusNode _nameFocus = FocusNode();
 
   @override
   void dispose() {
-    _nameSearch.dispose();
-    _companySearch.dispose();
-    _titleSearch.dispose();
+    _nameQuery.dispose();
+    _companyQuery.dispose();
+    _titleQuery.dispose();
+    _nameFocus.dispose();
     super.dispose();
   }
 
-  List<AppUser> _filtered(BankProvider bank) {
-    var employees =
-        bank.users.where((u) => u.role != UserRole.superAdmin).toList();
-
-    final nameQ = _nameSearch.text.trim().toLowerCase();
-    final companyQ = _companySearch.text.trim().toLowerCase();
-    final titleQ = _titleSearch.text.trim().toLowerCase();
-
-    if (nameQ.isNotEmpty) {
-      employees = employees
-          .where((u) => u.fullName.toLowerCase().contains(nameQ))
-          .toList();
-    }
-    if (companyQ.isNotEmpty) {
-      employees = employees.where((u) {
-        final company = bank.companyById(u.companyId);
-        final cname = (company?.name ?? 'şirketsiz').toLowerCase();
-        return cname.contains(companyQ);
-      }).toList();
-    }
-    if (titleQ.isNotEmpty) {
-      employees = employees
-          .where((u) => u.title.toLowerCase().contains(titleQ))
-          .toList();
-    }
-    return employees;
-  }
+  /// Komut paletinden veya kısayoldan aramaya odaklanmak için.
+  void focusSearch() => _nameFocus.requestFocus();
 
   @override
   Widget build(BuildContext context) {
     final bank = context.watch<BankProvider>();
-    final employees = _filtered(bank);
-    final totalEmployees =
-        bank.users.where((u) => u.role != UserRole.superAdmin).length;
-    final cur = bank.currency;
-    final hasQuery = _nameSearch.text.trim().isNotEmpty ||
-        _companySearch.text.trim().isNotEmpty ||
-        _titleSearch.text.trim().isNotEmpty;
+    final scheme = Theme.of(context).colorScheme;
+    final results = bank.searchUsers(
+      query: _nameQuery.text,
+      companyQuery: _companyQuery.text,
+      titleQuery: _titleQuery.text,
+      role: _roleFilter,
+      activeOnly: _statusFilter == 0 ? null : _statusFilter == 1,
+      sortBy: _sortBy,
+      ascending: _ascending,
+    ).where((u) => _companyFilter == null || u.companyId == _companyFilter).toList();
 
-    return Scaffold(
-      body: Column(
+    final visible = results.take(_visible).toList();
+    final selectedUsers =
+        bank.users.where((u) => _selected.contains(u.id)).toList();
+
+    return PageBody(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(24, 20, 24, 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
+          FadeSlideIn(
+            child: AppCard(
+              padding: const EdgeInsets.all(18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final compact = constraints.maxWidth < 820;
+                      final title = Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Kullanıcılar',
+                              style:
+                                  Theme.of(context).textTheme.headlineSmall),
+                          const SizedBox(height: 4),
+                          Text(
+                            '${bank.users.length} kayıt • ${results.length} sonuç • '
+                            '${bank.activeEmployeeCount} aktif çalışan',
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodySmall
+                                ?.copyWith(color: scheme.onSurfaceVariant),
+                          ),
+                        ],
+                      );
+                      final actions = <Widget>[
+                        OutlinedButton.icon(
+                          onPressed: () => showImportDialog(context),
+                          icon: const Icon(Icons.text_snippet_outlined,
+                              size: 18),
+                          label: const Text('TXT ile Kullanıcı Ekle'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: () => showBonusDialog(
+                            context,
+                            targets: const [],
+                            companyWide: true,
+                            companyId: _companyFilter ??
+                                (bank.companies.isEmpty
+                                    ? null
+                                    : bank.companies.first.id),
+                          ),
+                          icon: const Icon(Icons.card_giftcard, size: 18),
+                          label: const Text('Toplu Prim Dağıt'),
+                        ),
+                        FilledButton.icon(
+                          onPressed: () => showUserEditor(context),
+                          icon: const Icon(Icons.person_add_alt_1, size: 18),
+                          label: const Text('Yeni Kullanıcı'),
+                        ),
+                      ];
+                      if (compact) {
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            title,
+                            const SizedBox(height: 14),
+                            Wrap(
+                              spacing: 10,
+                              runSpacing: 10,
+                              children: actions,
+                            ),
+                          ],
+                        );
+                      }
+                      return Row(
+                        children: [
+                          Expanded(child: title),
+                          for (final a in actions) ...[
+                            a,
+                            const SizedBox(width: 10),
+                          ],
+                        ],
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    children: [
+                      SizedBox(
+                        width: 240,
+                        child: TextField(
+                          controller: _nameQuery,
+                          focusNode: _nameFocus,
+                          onChanged: (_) => setState(() => _visible = 60),
+                          decoration: const InputDecoration(
+                            labelText: 'Ada göre ara',
+                            prefixIcon: Icon(Icons.search, size: 19),
+                            isDense: true,
+                          ),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 240,
+                        child: TextField(
+                          controller: _companyQuery,
+                          onChanged: (_) => setState(() => _visible = 60),
+                          decoration: const InputDecoration(
+                            labelText: 'Şirkete göre ara',
+                            prefixIcon: Icon(Icons.business_outlined, size: 19),
+                            isDense: true,
+                          ),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 240,
+                        child: TextField(
+                          controller: _titleQuery,
+                          onChanged: (_) => setState(() => _visible = 60),
+                          decoration: const InputDecoration(
+                            labelText: 'Unvana göre ara',
+                            prefixIcon: Icon(Icons.badge_outlined, size: 19),
+                            isDense: true,
+                          ),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 190,
+                        child: DropdownButtonFormField<UserRole?>(
+                          value: _roleFilter,
+                          isExpanded: true,
+                          decoration: const InputDecoration(
+                            labelText: 'Rol',
+                            isDense: true,
+                          ),
+                          items: [
+                            const DropdownMenuItem<UserRole?>(
+                                value: null, child: Text('Tüm roller')),
+                            for (final r in UserRole.values)
+                              DropdownMenuItem<UserRole?>(
+                                  value: r, child: Text(r.label)),
+                          ],
+                          onChanged: (v) => setState(() => _roleFilter = v),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 210,
+                        child: DropdownButtonFormField<String?>(
+                          value: _companyFilter,
+                          isExpanded: true,
+                          decoration: const InputDecoration(
+                            labelText: 'Şirket filtresi',
+                            isDense: true,
+                          ),
+                          items: [
+                            const DropdownMenuItem<String?>(
+                                value: null, child: Text('Tüm şirketler')),
+                            for (final c in bank.companies)
+                              DropdownMenuItem<String?>(
+                                  value: c.id, child: Text(c.name)),
+                          ],
+                          onChanged: (v) => setState(() => _companyFilter = v),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 210,
+                        child: DropdownButtonFormField<String>(
+                          value: _sortBy,
+                          decoration: const InputDecoration(
+                            labelText: 'Sıralama',
+                            isDense: true,
+                          ),
+                          items: const [
+                            DropdownMenuItem(
+                                value: 'name', child: Text('Ada göre')),
+                            DropdownMenuItem(
+                                value: 'salary', child: Text('Maaşa göre')),
+                            DropdownMenuItem(
+                                value: 'balance', child: Text('Bakiyeye göre')),
+                            DropdownMenuItem(
+                                value: 'company', child: Text('Şirkete göre')),
+                            DropdownMenuItem(
+                                value: 'title', child: Text('Unvana göre')),
+                            DropdownMenuItem(
+                                value: 'contract',
+                                child: Text('Sözleşme bitişine göre')),
+                          ],
+                          onChanged: (v) =>
+                              setState(() => _sortBy = v ?? 'name'),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: _ascending
+                            ? 'Artan sıralama (tıkla: azalan)'
+                            : 'Azalan sıralama (tıkla: artan)',
+                        icon: Icon(_ascending
+                            ? Icons.arrow_upward
+                            : Icons.arrow_downward),
+                        onPressed: () =>
+                            setState(() => _ascending = !_ascending),
+                      ),
+                      SegmentedButton<int>(
+                        segments: const [
+                          ButtonSegment(value: 0, label: Text('Tümü')),
+                          ButtonSegment(value: 1, label: Text('Aktif')),
+                          ButtonSegment(value: 2, label: Text('Pasif')),
+                        ],
+                        selected: {_statusFilter},
+                        onSelectionChanged: (v) =>
+                            setState(() => _statusFilter = v.first),
+                      ),
+                      TextButton.icon(
+                        onPressed: () => setState(() {
+                          _nameQuery.clear();
+                          _companyQuery.clear();
+                          _titleQuery.clear();
+                          _roleFilter = null;
+                          _companyFilter = null;
+                          _statusFilter = 0;
+                          _sortBy = 'name';
+                          _ascending = true;
+                          _visible = 60;
+                        }),
+                        icon: const Icon(Icons.restart_alt, size: 17),
+                        label: const Text('Sıfırla'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          AnimatedSize(
+            duration: const Duration(milliseconds: 220),
+            child: _selected.isEmpty
+                ? const SizedBox(width: double.infinity)
+                : Padding(
+                    padding: const EdgeInsets.only(bottom: 14),
+                    child: AppCard(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 12),
+                      color: Theme.of(context)
+                          .colorScheme
+                          .primary
+                          .withValues(alpha: 0.10),
+                      borderColor: Theme.of(context)
+                          .colorScheme
+                          .primary
+                          .withValues(alpha: 0.35),
+                      child: Wrap(
+                        spacing: 12,
+                        runSpacing: 10,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          const Icon(Icons.check_circle_outline, size: 18),
+                          Text(
+                            '${_selected.length} kayıt seçildi',
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          FilledButton.tonalIcon(
+                            onPressed: () =>
+                                showBulkActionsDialog(context, selectedUsers),
+                            icon: const Icon(Icons.bolt_outlined, size: 17),
+                            label: const Text('Toplu İşlem'),
+                          ),
+                          TextButton(
+                            onPressed: () => setState(_selected.clear),
+                            child: const Text('Seçimi temizle'),
+                          ),
+                          Text(
+                            'Toplam bakiye: ${bank.money(selectedUsers.fold<double>(0, (a, u) => a + u.balance))}',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+          ),
+          if (visible.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                children: [
+                  Checkbox(
+                    value: _allVisibleSelected(visible),
+                    onChanged: (v) => setState(() {
+                      if (v == true) {
+                        _selected.addAll(visible.map((u) => u.id));
+                      } else {
+                        _selected.removeAll(visible.map((u) => u.id));
+                      }
+                    }),
+                  ),
+                  Text(
+                    _allVisibleSelected(visible)
+                        ? 'Görünenlerin tümü seçili'
+                        : 'Görünen tümünü seç',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const Spacer(),
+                  Text(
+                    '${visible.length} / ${results.length} kayıt',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ),
+          if (results.isEmpty)
+            const AppCard(
+              child: EmptyState(
+                icon: Icons.person_search_outlined,
+                title: 'Sonuç bulunamadı',
+                message:
+                    'Arama kutularını veya filtreleri değiştirin. Yeni kullanıcı eklemek için "Yeni Kullanıcı" düğmesini kullanın.',
+              ),
+            )
+          else
+            AppCard(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              child: Column(
+                children: [
+                  for (final u in visible) _userRow(context, bank, u),
+                ],
+              ),
+            ),
+          if (results.length > visible.length)
+            Padding(
+              padding: const EdgeInsets.only(top: 14),
+              child: Center(
+                child: FilledButton.tonalIcon(
+                  onPressed: () => setState(() => _visible += 60),
+                  icon: const Icon(Icons.expand_more, size: 18),
+                  label: Text(
+                      'Daha fazla göster (${results.length - visible.length} kayıt daha)'),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  bool _allVisibleSelected(List<AppUser> visible) =>
+      visible.isNotEmpty && visible.every((u) => _selected.contains(u.id));
+
+  Widget _userRow(BuildContext context, BankProvider bank, AppUser u) {
+    final scheme = Theme.of(context).colorScheme;
+    final company = bank.companyById(u.companyId);
+    final selected = _selected.contains(u.id);
+    final windowWidth = MediaQuery.of(context).size.width;
+    final isWide = windowWidth >= 1180;
+    final showRoleBadge = windowWidth >= 1000;
+
+    return HoverLift(
+      scale: 1.004,
+      onTap: () => _showUserDetail(context, bank, u),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected
+              ? scheme.primary.withValues(alpha: 0.08)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Row(
+          children: [
+            Checkbox(
+              value: selected,
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.compact,
+              onChanged: (v) => setState(() {
+                if (v == true) {
+                  _selected.add(u.id);
+                } else {
+                  _selected.remove(u.id);
+                }
+              }),
+            ),
+            AvatarBubble(
+              name: u.fullName,
+              colorValue: u.avatarColor,
+              radius: 18,
+              showStatus: true,
+              isActive: u.isActive,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              flex: 3,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    u.fullName,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w700, fontSize: 13.5),
+                  ),
+                  Text(
+                    '${u.title}${u.department.isEmpty ? '' : ' • ${u.department}'}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        fontSize: 11.5, color: scheme.onSurfaceVariant),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              flex: 2,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    company?.name ?? 'Bağımsız',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 12.5, fontWeight: FontWeight.w600),
+                  ),
+                  Text(
+                    u.email,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style:
+                        TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+                  ),
+                ],
+              ),
+            ),
+            if (isWide) ...[
+              Expanded(
+                flex: 1,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    FilledButton.tonalIcon(
-                      icon: const Icon(Icons.upload_file, size: 18),
-                      label: const Text('TXT ile Kullanıcı Ekle'),
-                      onPressed: () => _importFromTxt(context),
+                    Text(
+                      bank.money(u.salary, compact: true),
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w700, fontSize: 12.5),
                     ),
-                    FilledButton.tonalIcon(
-                      icon: const Icon(Icons.card_giftcard, size: 18),
-                      label: const Text('Toplu Prim Dağıt'),
-                      onPressed: () => _bulkBonus(context),
-                    ),
+                    Text('maaş',
+                        style:
+                            TextStyle(fontSize: 10, color: scheme.outline)),
                   ],
                 ),
-                const SizedBox(height: 14),
-                LayoutBuilder(builder: (context, c) {
-                  final wide = c.maxWidth >= 780;
-                  final fields = [
-                    _searchField(
-                      controller: _nameSearch,
-                      label: 'Ada göre ara',
-                      icon: Icons.person_search,
+              ),
+              Expanded(
+                flex: 1,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      bank.money(u.balance, compact: true),
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w700, fontSize: 12.5),
                     ),
-                    _searchField(
-                      controller: _companySearch,
-                      label: 'Şirkete göre ara',
-                      icon: Icons.business,
-                    ),
-                    _searchField(
-                      controller: _titleSearch,
-                      label: 'Unvana göre ara',
-                      icon: Icons.badge_outlined,
-                    ),
-                  ];
-                  if (wide) {
-                    return Row(
-                      children: [
-                        for (int i = 0; i < fields.length; i++) ...[
-                          if (i > 0) const SizedBox(width: 10),
-                          Expanded(child: fields[i]),
-                        ],
-                      ],
-                    );
-                  }
-                  return Column(
+                    Text('bakiye',
+                        style:
+                            TextStyle(fontSize: 10, color: scheme.outline)),
+                  ],
+                ),
+              ),
+            ],
+            const SizedBox(width: 8),
+            if (u.isContractExpired)
+              const PillBadge(
+                label: 'sözleşme bitti',
+                color: Color(0xFFEF4444),
+                dense: true,
+              )
+            else if (u.isContractExpiringSoon)
+              PillBadge(
+                label: '${u.contractDaysLeft} gün',
+                color: const Color(0xFFF59E0B),
+                dense: true,
+              ),
+            if (showRoleBadge && u.role != UserRole.employee)
+              Padding(
+                padding: const EdgeInsets.only(left: 6),
+                child: PillBadge(
+                  label: u.role.label,
+                  color: scheme.secondary,
+                  dense: true,
+                ),
+              ),
+            const SizedBox(width: 4),
+            IconButton(
+              tooltip: 'İsmi Düzenle',
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.drive_file_rename_outline, size: 18),
+              onPressed: () => _renameUser(context, bank, u),
+            ),
+            IconButton(
+              tooltip: 'Kullanıcı kartı',
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.open_in_new, size: 18),
+              onPressed: () => _showUserDetail(context, bank, u),
+            ),
+            PopupMenuButton<String>(
+              tooltip: 'Tüm işlemler',
+              icon: const Icon(Icons.more_vert, size: 18),
+              onSelected: (value) => _handleAction(context, bank, u, value),
+              itemBuilder: (context) => const [
+                PopupMenuItem(
+                    value: 'edit',
+                    child: ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(Icons.edit_outlined, size: 18),
+                      title: Text('Tam düzenle'),
+                    )),
+                PopupMenuItem(
+                    value: 'salary',
+                    child: ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(Icons.payments_outlined, size: 18),
+                      title: Text('Maaş öde'),
+                    )),
+                PopupMenuItem(
+                    value: 'bonus',
+                    child: ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(Icons.card_giftcard, size: 18),
+                      title: Text('Prim öde'),
+                    )),
+                PopupMenuItem(
+                    value: 'penalty',
+                    child: ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(Icons.gavel_outlined, size: 18),
+                      title: Text('Ceza uygula'),
+                    )),
+                PopupMenuItem(
+                    value: 'promote',
+                    child: ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(Icons.trending_up, size: 18),
+                      title: Text('Terfi / zam'),
+                    )),
+                PopupMenuItem(
+                    value: 'contract',
+                    child: ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(Icons.event_note_outlined, size: 18),
+                      title: Text('Sözleşme işlemleri'),
+                    )),
+                PopupMenuItem(
+                    value: 'transfer',
+                    child: ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(Icons.swap_horiz, size: 18),
+                      title: Text('Şirket değiştir'),
+                    )),
+                PopupMenuItem(
+                    value: 'loan',
+                    child: ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(Icons.request_quote_outlined, size: 18),
+                      title: Text('Kredi ver'),
+                    )),
+                PopupMenuItem(
+                    value: 'password',
+                    child: ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(Icons.lock_reset, size: 18),
+                      title: Text('Şifre değiştir'),
+                    )),
+                PopupMenuDivider(),
+                PopupMenuItem(
+                    value: 'toggle',
+                    child: ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(Icons.power_settings_new, size: 18),
+                      title: Text('Aktif / pasif'),
+                    )),
+                PopupMenuItem(
+                    value: 'dismiss',
+                    child: ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(Icons.person_remove_outlined, size: 18),
+                      title: Text('İşten çıkar'),
+                    )),
+                PopupMenuItem(
+                    value: 'delete',
+                    child: ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(Icons.delete_outline,
+                          size: 18, color: Color(0xFFEF4444)),
+                      title: Text('Sil',
+                          style: TextStyle(color: Color(0xFFEF4444))),
+                    )),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _handleAction(
+    BuildContext context,
+    BankProvider bank,
+    AppUser u,
+    String action,
+  ) async {
+    switch (action) {
+      case 'edit':
+        await showUserEditor(context, user: u);
+        break;
+      case 'salary':
+        await showPaySalaryDialog(context, u);
+        break;
+      case 'bonus':
+        await showBonusDialog(context, targets: [u]);
+        break;
+      case 'penalty':
+        await showPenaltyDialog(context, targets: [u]);
+        break;
+      case 'promote':
+        await showPromoteDialog(context, targets: [u]);
+        break;
+      case 'contract':
+        await showContractDialog(context, u);
+        break;
+      case 'transfer':
+        await showTransferDialog(context, u);
+        break;
+      case 'loan':
+        if (!bank.settings.loansEnabled) {
+          showSnackBar(context, 'Kredi sistemi ayarlardan kapatılmış.',
+              error: true);
+          return;
+        }
+        await showLoanDialog(context, u);
+        break;
+      case 'password':
+        await showPasswordDialog(context, u);
+        break;
+      case 'toggle':
+        bank.setUserActive(u.id, !u.isActive);
+        showSnackBar(context,
+            u.isActive ? '${u.fullName} pasife alındı.' : '${u.fullName} aktifleştirildi.');
+        break;
+      case 'dismiss':
+        await showDismissDialog(context, u);
+        break;
+      case 'delete':
+        if (!context.mounted) return;
+        await showConfirmDialog(
+          context,
+          title: '${u.fullName} silinsin mi?',
+          message:
+              'Kullanıcı ve kredi kayıtları silinir. İşlem geçmişi korunur. Bu işlemi Geri Al ile geri alabilirsiniz.',
+          icon: Icons.delete_outline,
+          danger: true,
+          confirmText: 'Sil',
+          onConfirm: () {
+            try {
+              bank.deleteUser(u.id);
+              showSnackBar(context, '${u.fullName} silindi.');
+            } catch (e) {
+              showError(context, e);
+            }
+          },
+        );
+        break;
+    }
+  }
+
+  Future<void> _renameUser(
+      BuildContext context, BankProvider bank, AppUser u) async {
+    final controller = TextEditingController(text: u.fullName);
+    String? error;
+    await showAppDialog<void>(
+      context,
+      title: 'İsmi Düzenle',
+      subtitle: '${u.email} • ${u.title}',
+      icon: Icons.drive_file_rename_outline,
+      maxWidth: 460,
+      child: StatefulBuilder(
+        builder: (ctx, setState) => Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: controller,
+              autofocus: true,
+              decoration: InputDecoration(
+                labelText: 'Yeni Ad Soyad',
+                prefixIcon: const Icon(Icons.person_outline),
+                errorText: error,
+              ),
+              onSubmitted: (_) {
+                final clean = controller.text.trim();
+                if (clean.isEmpty) {
+                  setState(() => error = 'Ad Soyad boş bırakılamaz.');
+                  return;
+                }
+                bank.updateUserName(u.id, clean);
+                Navigator.pop(ctx);
+                showSnackBar(context, 'İsim güncellendi.');
+              },
+            ),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('İptal'),
+                ),
+                const SizedBox(width: 10),
+                FilledButton(
+                  onPressed: () {
+                    final clean = controller.text.trim();
+                    if (clean.isEmpty) {
+                      setState(() => error = 'Ad Soyad boş bırakılamaz.');
+                      return;
+                    }
+                    bank.updateUserName(u.id, clean);
+                    Navigator.pop(ctx);
+                    showSnackBar(context, 'İsim güncellendi.');
+                  },
+                  child: const Text('Kaydet'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+    controller.dispose();
+  }
+
+  void _showUserDetail(BuildContext context, BankProvider bank, AppUser u) {
+    showAppDialog<void>(
+      context,
+      title: u.fullName,
+      subtitle: '${u.title} • ${bank.companyById(u.companyId)?.name ?? 'Bağımsız'}',
+      icon: Icons.badge_outlined,
+      accent: u.avatarColor == 0
+          ? Theme.of(context).colorScheme.primary
+          : Color(u.avatarColor),
+      maxWidth: 880,
+      scrollable: false,
+      child: _UserDetailBody(userId: u.id, bank: bank),
+    );
+  }
+}
+
+/// Kullanıcı detay gövdesi (sekme: özet / işlemler / krediler).
+class _UserDetailBody extends StatefulWidget {
+  final String userId;
+  final BankProvider bank;
+
+  const _UserDetailBody({required this.userId, required this.bank});
+
+  @override
+  State<_UserDetailBody> createState() => _UserDetailBodyState();
+}
+
+class _UserDetailBodyState extends State<_UserDetailBody> {
+  int _tab = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final bank = widget.bank;
+    final user = bank.userById(widget.userId);
+    final scheme = Theme.of(context).colorScheme;
+    if (user == null) {
+      return const Padding(
+        padding: EdgeInsets.all(24),
+        child: EmptyState(
+          icon: Icons.person_off_outlined,
+          title: 'Kullanıcı bulunamadı',
+          message: 'Bu kayıt silinmiş olabilir.',
+        ),
+      );
+    }
+    final company = bank.companyById(user.companyId);
+    final txns = bank.txnsOfUser(user.id);
+    final loans = bank.loansOfUser(user.id);
+    final tax = bank.settings.taxEnabled
+        ? user.salary * (bank.settings.taxPercent / 100)
+        : 0.0;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(24, 12, 24, 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  (user.avatarColor == 0 ? scheme.primary : Color(user.avatarColor))
+                      .withValues(alpha: 0.85),
+                  scheme.secondary.withValues(alpha: 0.7),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: Row(
+              children: [
+                AvatarBubble(
+                    name: user.fullName,
+                    colorValue: user.avatarColor,
+                    radius: 26),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      for (int i = 0; i < fields.length; i++) ...[
-                        if (i > 0) const SizedBox(height: 10),
-                        fields[i],
-                      ],
-                    ],
-                  );
-                }),
-                const SizedBox(height: 8),
-                Text(
-                  hasQuery
-                      ? '$totalEmployees kullanıcıdan ${employees.length} sonuç'
-                      : '$totalEmployees kayıtlı kullanıcı',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      Text(
+                        user.fullName,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 17,
+                        ),
                       ),
+                      Text(
+                        '${user.roleLabel} • ${company?.name ?? 'Bağımsız'}',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.9),
+                          fontSize: 12,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        bank.money(user.balance),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 22,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    PillBadge(
+                      label: user.isActive ? 'Aktif' : 'Pasif',
+                      color: user.isActive
+                          ? const Color(0xFF22C55E)
+                          : const Color(0xFF94A3B8),
+                    ),
+                    const SizedBox(height: 6),
+                    PillBadge(
+                      label: user.isContractExpired
+                          ? 'Sözleşme bitti'
+                          : '${user.contractDaysLeft} gün kaldı',
+                      color: user.isContractExpired
+                          ? const Color(0xFFEF4444)
+                          : const Color(0xFFF59E0B),
+                    ),
+                  ],
                 ),
               ],
             ),
           ),
-          Expanded(
-            child: employees.isEmpty
-                ? Center(
-                    child: Text(
-                      totalEmployees == 0
-                          ? 'Henüz kayıtlı çalışan bulunmuyor.\n"Yeni Kullanıcı" veya "TXT ile Kullanıcı Ekle" ile ekleyebilirsiniz.'
-                          : 'Arama kriterlerine uygun kullanıcı bulunamadı.',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.grey),
-                    ),
-                  )
-                : ListView.builder(
-                    padding: const EdgeInsets.fromLTRB(24, 8, 24, 96),
-                    itemCount: employees.length,
-                    itemBuilder: (context, i) {
-                      final u = employees[i];
-                      final company = bank.companyById(u.companyId);
-                      final contractDays =
-                          u.contractEnd.difference(DateTime.now()).inDays;
-                      final isExpired = u.contractEnd.isBefore(DateTime.now());
-
-                      return Card(
-                        margin: const EdgeInsets.only(bottom: 12),
-                        child: ExpansionTile(
-                          shape: const RoundedRectangleBorder(
-                              side: BorderSide.none),
-                          leading: CircleAvatar(
-                            backgroundColor: u.isActive
-                                ? Theme.of(context)
-                                    .colorScheme
-                                    .primaryContainer
-                                : Colors.grey.withAlpha(77),
-                            child: Text(
-                              u.fullName.isNotEmpty
-                                  ? u.fullName[0].toUpperCase()
-                                  : '?',
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                color: u.isActive
-                                    ? Theme.of(context)
-                                        .colorScheme
-                                        .onPrimaryContainer
-                                    : Colors.grey,
-                              ),
-                            ),
-                          ),
-                          title: Row(
-                            children: [
-                              Flexible(
-                                child: Text(
-                                  u.fullName,
-                                  style: const TextStyle(
-                                      fontWeight: FontWeight.bold),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                              const SizedBox(width: 4),
-                              IconButton(
-                                icon: const Icon(Icons.edit_outlined, size: 16),
-                                tooltip: 'İsmi Düzenle',
-                                padding: EdgeInsets.zero,
-                                constraints: const BoxConstraints(),
-                                onPressed: () => _editName(context, u),
-                              ),
-                              if (!u.isActive) ...[
-                                const SizedBox(width: 8),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 6, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: Colors.red.withAlpha(51),
-                                    borderRadius: BorderRadius.circular(4),
-                                    border: Border.all(
-                                        color: Colors.red.shade400),
-                                  ),
-                                  child: const Text('PASİF',
-                                      style: TextStyle(
-                                          fontSize: 10, color: Colors.red)),
-                                ),
-                              ],
-                            ],
-                          ),
-                          subtitle: Text(
-                            '${u.title} • ${company?.name ?? "Şirketsiz"}',
-                            style: const TextStyle(fontSize: 13),
-                          ),
-                          trailing: Text(
-                            money(u.balance, cur),
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 15,
-                            ),
-                          ),
-                          children: [
-                            Padding(
-                              padding:
-                                  const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  _infoRow('Aylık Maaş', money(u.salary, cur)),
-                                  _infoRow('Aylık Prim', money(u.bonus, cur)),
-                                  _infoRow('Maaş Günü',
-                                      'Her ayın ${u.salaryDate.day}. günü'),
-                                  _infoRow(
-                                      'Sözleşme Bitiş',
-                                      DateFormat('dd.MM.yyyy')
-                                          .format(u.contractEnd)),
-                                  _infoRow('Erken Fesih Tazminatı',
-                                      money(u.terminationFee, cur)),
-                                  if (isExpired)
-                                    const Padding(
-                                      padding: EdgeInsets.only(top: 4),
-                                      child: Text(
-                                          '⚠️ Sözleşme süresi dolmuş',
-                                          style: TextStyle(
-                                              color: Colors.orange)),
-                                    )
-                                  else
-                                    Padding(
-                                      padding: const EdgeInsets.only(top: 2),
-                                      child: Text(
-                                        '⏳ Kalan süre: $contractDays gün',
-                                        style: const TextStyle(
-                                            color: Colors.blueGrey,
-                                            fontSize: 12),
-                                      ),
-                                    ),
-                                  const Divider(height: 24),
-                                  Wrap(
-                                    spacing: 8,
-                                    runSpacing: 8,
-                                    children: [
-                                      FilledButton.tonalIcon(
-                                        icon: const Icon(Icons.edit_outlined,
-                                            size: 18),
-                                        label: const Text('İsmi Düzenle'),
-                                        onPressed: () => _editName(context, u),
-                                      ),
-                                      FilledButton.tonalIcon(
-                                        icon: const Icon(
-                                            Icons.payments_outlined,
-                                            size: 18),
-                                        label: const Text('Maaş Öde'),
-                                        onPressed: () => _paySalary(context, u),
-                                      ),
-                                      FilledButton.tonalIcon(
-                                        icon: const Icon(Icons.card_giftcard,
-                                            size: 18),
-                                        label: const Text('Prim Ver'),
-                                        onPressed: () => _bonus(context, u),
-                                      ),
-                                      FilledButton.tonalIcon(
-                                        icon: const Icon(
-                                            Icons.warning_amber_rounded,
-                                            size: 18,
-                                            color: Colors.orange),
-                                        label: const Text('Ceza Uygula'),
-                                        onPressed: () => _penalty(context, u),
-                                      ),
-                                      FilledButton.tonalIcon(
-                                        icon: const Icon(Icons.trending_up,
-                                            size: 18, color: Colors.green),
-                                        label: const Text('Terfi Ettir'),
-                                        onPressed: () => _promote(context, u),
-                                      ),
-                                      FilledButton.tonalIcon(
-                                        icon: const Icon(Icons.casino_outlined,
-                                            size: 18),
-                                        label: const Text('Kesinti Yap'),
-                                        onPressed: () {
-                                          final d = bank
-                                              .applyRandomDeduction(u.id);
-                                          if (d > 0) {
-                                            showSnackBar(context,
-                                                '${money(d, cur)} kesinti yapıldı.');
-                                          } else {
-                                            showSnackBar(
-                                                context,
-                                                'Kullanıcı bakiyesi yetersiz olduğu için kesinti yapılamadı.',
-                                                error: true);
-                                          }
-                                        },
-                                      ),
-                                      FilledButton.tonalIcon(
-                                        icon: const Icon(Icons.swap_horiz,
-                                            size: 18),
-                                        label: const Text('Şirket Değiştir'),
-                                        onPressed: () =>
-                                            _transfer(context, u),
-                                      ),
-                                      FilledButton.tonalIcon(
-                                        icon: const Icon(
-                                            Icons.description_outlined,
-                                            size: 18),
-                                        label: const Text('Sözleşme Yenile'),
-                                        onPressed: () =>
-                                            _renewContract(context, u),
-                                      ),
-                                      OutlinedButton.icon(
-                                        icon: const Icon(
-                                            Icons.receipt_long_outlined,
-                                            size: 18),
-                                        label: const Text('İşlem Geçmişi'),
-                                        onPressed: () =>
-                                            _showHistory(context, u),
-                                      ),
-                                      OutlinedButton.icon(
-                                        icon: const Icon(Icons.delete_outline,
-                                            size: 18, color: Colors.red),
-                                        label: const Text('Sil',
-                                            style:
-                                                TextStyle(color: Colors.red)),
-                                        onPressed: () => showConfirmDialog(
-                                          context,
-                                          title: 'Kullanıcıyı Sil',
-                                          message:
-                                              '"${u.fullName}" adlı kullanıcıyı sistemden silmek istediğinize emin misiniz?',
-                                          confirmText: 'Kullanıcıyı Sil',
-                                          confirmColor: Colors.red,
-                                          onConfirm: () {
-                                            bank.deleteUser(u.id);
-                                            showSnackBar(context,
-                                                'Kullanıcı silindi.');
-                                          },
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
+          const SizedBox(height: 16),
+          SegmentedButton<int>(
+            segments: [
+              const ButtonSegment(
+                  value: 0,
+                  label: Text('Özet'),
+                  icon: Icon(Icons.info_outline, size: 15)),
+              ButtonSegment(
+                  value: 1,
+                  label: Text('İşlemler (${txns.length})'),
+                  icon: const Icon(Icons.receipt_long_outlined, size: 15)),
+              ButtonSegment(
+                  value: 2,
+                  label: Text('Krediler (${loans.length})'),
+                  icon: const Icon(Icons.request_quote_outlined, size: 15)),
+            ],
+            selected: {_tab},
+            onSelectionChanged: (v) => setState(() => _tab = v.first),
           ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        icon: const Icon(Icons.person_add),
-        label: const Text('Yeni Kullanıcı'),
-        onPressed: () => _addUser(context),
-      ),
-    );
-  }
-
-  Widget _searchField({
-    required TextEditingController controller,
-    required String label,
-    required IconData icon,
-  }) {
-    return TextField(
-      controller: controller,
-      decoration: InputDecoration(
-        labelText: label,
-        prefixIcon: Icon(icon),
-        suffixIcon: controller.text.isNotEmpty
-            ? IconButton(
-                icon: const Icon(Icons.clear, size: 18),
-                onPressed: () {
-                  controller.clear();
-                  setState(() {});
-                },
+          const SizedBox(height: 16),
+          if (_tab == 0) ...[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    children: [
+                      KeyValueRow(
+                          label: 'E-posta',
+                          value: user.email,
+                          icon: Icons.alternate_email),
+                      KeyValueRow(
+                          label: 'Telefon',
+                          value: user.phone.isEmpty ? '-' : user.phone,
+                          icon: Icons.phone_outlined),
+                      KeyValueRow(
+                          label: 'IBAN',
+                          value: user.iban.isEmpty ? '-' : user.iban,
+                          icon: Icons.account_balance_outlined),
+                      KeyValueRow(
+                          label: 'Departman',
+                          value:
+                              user.department.isEmpty ? '-' : user.department,
+                          icon: Icons.grid_view_outlined),
+                      KeyValueRow(
+                          label: 'İşe giriş',
+                          value: Fmt.date(user.hireDate),
+                          icon: Icons.event_outlined),
+                      KeyValueRow(
+                          label: 'Son giriş',
+                          value: user.lastLogin == null
+                              ? '-'
+                              : Fmt.dateTime(user.lastLogin!),
+                          icon: Icons.login_outlined),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 20),
+                Expanded(
+                  child: Column(
+                    children: [
+                      KeyValueRow(
+                          label: 'Maaş',
+                          value: bank.money(user.salary),
+                          icon: Icons.payments_outlined),
+                      KeyValueRow(
+                          label: 'Aylık prim',
+                          value: bank.money(user.bonus),
+                          icon: Icons.card_giftcard),
+                      if (tax > 0)
+                        KeyValueRow(
+                            label: 'Gelir vergisi',
+                            value: '-${bank.money(tax)}',
+                            valueColor: const Color(0xFFEF4444),
+                            icon: Icons.percent),
+                      KeyValueRow(
+                          label: 'Net aylık',
+                          value: bank.money(user.salary - tax + user.bonus),
+                          icon: Icons.savings_outlined,
+                          valueColor: const Color(0xFF10B981)),
+                      KeyValueRow(
+                          label: 'Maaş günü',
+                          value: 'Her ayın ${user.salaryDate.day}. günü',
+                          icon: Icons.event_repeat_outlined),
+                      KeyValueRow(
+                          label: 'Sözleşme',
+                          value:
+                              '${Fmt.date(user.contractStart)} → ${Fmt.date(user.contractEnd)}',
+                          icon: Icons.event_note_outlined),
+                      KeyValueRow(
+                          label: 'Fesih ücreti',
+                          value: bank.money(user.terminationFee),
+                          icon: Icons.description_outlined),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            if (user.notes.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: scheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(user.notes),
+              ),
+            ],
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                FilledButton.tonalIcon(
+                  onPressed: () => showUserEditor(context, user: user),
+                  icon: const Icon(Icons.edit_outlined, size: 17),
+                  label: const Text('Tam Düzenle'),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: () => showPaySalaryDialog(context, user),
+                  icon: const Icon(Icons.payments_outlined, size: 17),
+                  label: const Text('Maaş Öde'),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: () => showBonusDialog(context, targets: [user]),
+                  icon: const Icon(Icons.card_giftcard, size: 17),
+                  label: const Text('Prim'),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: () => showPenaltyDialog(context, targets: [user]),
+                  icon: const Icon(Icons.gavel_outlined, size: 17),
+                  label: const Text('Ceza'),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: () => showPromoteDialog(context, targets: [user]),
+                  icon: const Icon(Icons.trending_up, size: 17),
+                  label: const Text('Terfi'),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: () => showContractDialog(context, user),
+                  icon: const Icon(Icons.event_note_outlined, size: 17),
+                  label: const Text('Sözleşme'),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: () => showTransferDialog(context, user),
+                  icon: const Icon(Icons.swap_horiz, size: 17),
+                  label: const Text('Şirket Değiştir'),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: () => showLoanDialog(context, user),
+                  icon: const Icon(Icons.request_quote_outlined, size: 17),
+                  label: const Text('Kredi'),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: () => showPasswordDialog(context, user),
+                  icon: const Icon(Icons.lock_reset, size: 17),
+                  label: const Text('Şifre'),
+                ),
+              ],
+            ),
+          ] else if (_tab == 1) ...[
+            if (txns.isEmpty)
+              const EmptyState(
+                icon: Icons.receipt_long_outlined,
+                title: 'İşlem yok',
+                message: 'Bu kullanıcı için kayıtlı hareket bulunmuyor.',
               )
-            : null,
-        border: const OutlineInputBorder(),
-        isDense: true,
-      ),
-      onChanged: (_) => setState(() {}),
-    );
-  }
-
-  Widget _infoRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label,
-              style: const TextStyle(color: Colors.grey, fontSize: 13)),
-          Text(value, style: const TextStyle(fontWeight: FontWeight.w500)),
+            else
+              for (final t in txns.take(80))
+                TxnListTile(
+                  txn: t,
+                  currency: bank.currency,
+                  digits: bank.decimalDigits,
+                  perspectiveId: user.id,
+                ),
+          ] else ...[
+            if (loans.isEmpty)
+              const EmptyState(
+                icon: Icons.request_quote_outlined,
+                title: 'Kredi kaydı yok',
+                message: 'Bu kullanıcıya tanımlanmış kredi bulunmuyor.',
+              )
+            else
+              for (final loan in loans)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.request_quote_outlined),
+                  title: Text(bank.money(loan.principal)),
+                  subtitle: Text(
+                      '${loan.paidInstallments}/${loan.totalInstallments} taksit • kalan ${bank.money(loan.remaining)}'),
+                  trailing: PillBadge(
+                    label: loan.isFinished ? 'Tamamlandı' : 'Aktif',
+                    color: loan.isFinished
+                        ? const Color(0xFF22C55E)
+                        : scheme.primary,
+                    dense: true,
+                  ),
+                ),
+          ],
         ],
-      ),
-    );
-  }
-
-  void _editName(BuildContext context, AppUser u) {
-    final nameCtrl = TextEditingController(text: u.fullName);
-
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('İsmi Düzenle'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameCtrl,
-              autofocus: true,
-              decoration: const InputDecoration(
-                labelText: 'Ad Soyad',
-                prefixIcon: Icon(Icons.person_outline),
-                border: OutlineInputBorder(),
-              ),
-              onSubmitted: (_) {
-                final clean = nameCtrl.text.trim();
-                if (clean.isEmpty) {
-                  showSnackBar(context, 'Ad Soyad boş bırakılamaz.',
-                      error: true);
-                  return;
-                }
-                try {
-                  context.read<BankProvider>().updateUserName(u.id, clean);
-                  Navigator.pop(ctx);
-                  showSnackBar(
-                      context, 'Kullanıcı adı "$clean" olarak güncellendi.');
-                } catch (e) {
-                  showSnackBar(
-                      context, e.toString().replaceAll('Exception: ', ''),
-                      error: true);
-                }
-              },
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('İptal'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final clean = nameCtrl.text.trim();
-              if (clean.isEmpty) {
-                showSnackBar(context, 'Ad Soyad boş bırakılamaz.',
-                    error: true);
-                return;
-              }
-              try {
-                context.read<BankProvider>().updateUserName(u.id, clean);
-                Navigator.pop(ctx);
-                showSnackBar(
-                    context, 'Kullanıcı adı "$clean" olarak güncellendi.');
-              } catch (e) {
-                showSnackBar(
-                    context, e.toString().replaceAll('Exception: ', ''),
-                    error: true);
-              }
-            },
-            child: const Text('Kaydet'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _paySalary(BuildContext context, AppUser u) {
-    final bank = context.read<BankProvider>();
-    try {
-      bank.paySalary(u.id);
-      showSnackBar(context,
-          '${u.fullName} adlı çalışana ${money(u.salary, bank.currency)} maaş ödendi.');
-    } catch (e) {
-      showSnackBar(context, e.toString().replaceAll('Exception: ', ''),
-          error: true);
-    }
-  }
-
-  void _bonus(BuildContext context, AppUser u) {
-    final ctrl = TextEditingController();
-    final noteCtrl = TextEditingController();
-    final cur = context.read<BankProvider>().currency;
-
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('${u.fullName} - Performans Primi'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: ctrl,
-              autofocus: true,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-              decoration: InputDecoration(
-                labelText: 'Prim Tutarı ($cur)',
-                prefixIcon: const Icon(Icons.attach_money),
-                border: const OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: noteCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Prim Açıklaması / Not',
-                prefixIcon: Icon(Icons.notes),
-                border: OutlineInputBorder(),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('İptal'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final raw = ctrl.text.trim().replaceAll(',', '.');
-              final v = double.tryParse(raw);
-              if (v == null || v <= 0) {
-                showSnackBar(
-                    context, 'Geçerli ve pozitif bir prim tutarı girin.',
-                    error: true);
-                return;
-              }
-              try {
-                context.read<BankProvider>().giveBonus(
-                      u.id,
-                      v,
-                      noteCtrl.text.isEmpty
-                          ? 'Performans primi'
-                          : noteCtrl.text.trim(),
-                    );
-                Navigator.pop(ctx);
-                showSnackBar(context,
-                    '${u.fullName} adlı çalışana ${money(v, cur)} prim verildi.');
-              } catch (e) {
-                showSnackBar(
-                    context, e.toString().replaceAll('Exception: ', ''),
-                    error: true);
-              }
-            },
-            child: const Text('Primi Ver'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _bulkBonus(BuildContext context) {
-    final bank = context.read<BankProvider>();
-    if (bank.companies.isEmpty) {
-      showSnackBar(context, 'Önce bir şirket oluşturmalısınız.', error: true);
-      return;
-    }
-
-    String? companyId = bank.companies.first.id;
-    final amountCtrl = TextEditingController();
-    final noteCtrl = TextEditingController(text: 'Şirket geneli toplu prim');
-    final cur = bank.currency;
-
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setS) {
-          final selected = companyId == null
-              ? null
-              : bank.companyById(companyId);
-          final empCount = companyId == null
-              ? 0
-              : bank
-                  .usersOfCompany(companyId!)
-                  .where((u) => u.isActive && u.role != UserRole.superAdmin)
-                  .length;
-          final raw = amountCtrl.text.trim().replaceAll(',', '.');
-          final unit = double.tryParse(raw);
-          final total = (unit != null && unit > 0) ? unit * empCount : 0.0;
-
-          return AlertDialog(
-            title: const Text('Toplu Prim Dağıt'),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  DropdownButtonFormField<String>(
-                    value: companyId,
-                    decoration: const InputDecoration(
-                      labelText: 'Şirket',
-                      prefixIcon: Icon(Icons.business),
-                      border: OutlineInputBorder(),
-                    ),
-                    items: bank.companies
-                        .map((c) => DropdownMenuItem(
-                              value: c.id,
-                              child: Text(c.name),
-                            ))
-                        .toList(),
-                    onChanged: (v) => setS(() => companyId = v),
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    selected == null
-                        ? ''
-                        : '${selected.name} • $empCount aktif çalışan • Bakiye: ${money(selected.balance, cur)}',
-                    style: const TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: amountCtrl,
-                    autofocus: true,
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
-                    decoration: InputDecoration(
-                      labelText: 'Çalışan başına prim ($cur)',
-                      prefixIcon: const Icon(Icons.card_giftcard),
-                      border: const OutlineInputBorder(),
-                    ),
-                    onChanged: (_) => setS(() {}),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: noteCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Açıklama',
-                      prefixIcon: Icon(Icons.notes),
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                  if (empCount > 0 && total > 0) ...[
-                    const SizedBox(height: 12),
-                    Text(
-                      'Toplam maliyet: ${money(total, cur)} ($empCount × ${money(unit!, cur)})',
-                      style: const TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('İptal'),
-              ),
-              FilledButton(
-                onPressed: () {
-                  if (companyId == null) return;
-                  final v = double.tryParse(
-                      amountCtrl.text.trim().replaceAll(',', '.'));
-                  if (v == null || v <= 0) {
-                    showSnackBar(context, 'Geçerli bir prim tutarı girin.',
-                        error: true);
-                    return;
-                  }
-                  try {
-                    final n = bank.giveBonusToCompany(
-                      companyId!,
-                      v,
-                      noteCtrl.text.trim(),
-                    );
-                    Navigator.pop(ctx);
-                    showSnackBar(context,
-                        '$n çalışana ${money(v, cur)} prim dağıtıldı.');
-                  } catch (e) {
-                    showSnackBar(
-                        context, e.toString().replaceAll('Exception: ', ''),
-                        error: true);
-                  }
-                },
-                child: const Text('Dağıt'),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  Future<void> _importFromTxt(BuildContext context) async {
-    final bank = context.read<BankProvider>();
-    if (bank.companies.isEmpty) {
-      showSnackBar(context, 'Önce bir şirket oluşturmalısınız.', error: true);
-      return;
-    }
-
-    String? companyId = bank.companies.first.id;
-    String? fileName;
-    String rawText = '';
-    final pasteCtrl = TextEditingController();
-    final cur = bank.currency;
-
-    List<String> parseNames(String content) {
-      final names = <String>[];
-      final seen = <String>{};
-      for (final line in content.split(RegExp(r'[\r\n]+'))) {
-        for (final part in line.split(RegExp(r'[,;|]'))) {
-          final n = part.trim().replaceAll(RegExp(r'\s+'), ' ');
-          if (n.isEmpty) continue;
-          if (seen.add(n.toLowerCase())) names.add(n);
-        }
-      }
-      return names;
-    }
-
-    if (!context.mounted) return;
-    await showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setS) {
-          final company = companyId == null ? null : bank.companyById(companyId);
-          final names = parseNames(
-              rawText.isNotEmpty ? rawText : pasteCtrl.text);
-
-          return AlertDialog(
-            title: const Text('TXT ile Kullanıcı Ekle'),
-            content: SizedBox(
-              width: 460,
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    DropdownButtonFormField<String>(
-                      value: companyId,
-                      decoration: const InputDecoration(
-                        labelText: 'Hedef Şirket',
-                        prefixIcon: Icon(Icons.business),
-                        border: OutlineInputBorder(),
-                      ),
-                      items: bank.companies
-                          .map((c) => DropdownMenuItem(
-                                value: c.id,
-                                child: Text(c.name),
-                              ))
-                          .toList(),
-                      onChanged: (v) => setS(() => companyId = v),
-                    ),
-                    const SizedBox(height: 12),
-                    if (company != null)
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Theme.of(ctx)
-                              .colorScheme
-                              .primaryContainer
-                              .withAlpha(90),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Text(
-                          'Her isim için otomatik uygulanır:\n'
-                          '• Maaş: ${company.name} maaş sınırı (${money(company.salaryLimit, cur)}) içinde dağıtılır\n'
-                          '• Sözleşme süresi: 1 ile 5 yıl arası\n'
-                          '• Fesih cezası: maaşın 2 veya 3 katı',
-                          style: const TextStyle(fontSize: 12, height: 1.45),
-                        ),
-                      ),
-                    const SizedBox(height: 16),
-                    InkWell(
-                      borderRadius: BorderRadius.circular(12),
-                      onTap: () async {
-                        try {
-                          final result = await FilePicker.platform.pickFiles(
-                            type: FileType.custom,
-                            allowedExtensions: const ['txt'],
-                            withData: true,
-                          );
-                          if (result == null || result.files.isEmpty) return;
-                          final file = result.files.single;
-                          String content = '';
-                          if (file.bytes != null) {
-                            content = utf8.decode(file.bytes!,
-                                allowMalformed: true);
-                          }
-                          setS(() {
-                            fileName = file.name;
-                            rawText = content;
-                            pasteCtrl.text = content;
-                          });
-                        } catch (e) {
-                          showSnackBar(
-                              context, 'Dosya okunamadı: $e',
-                              error: true);
-                        }
-                      },
-                      child: Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(
-                            vertical: 22, horizontal: 16),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: Theme.of(ctx).colorScheme.outline,
-                            style: BorderStyle.solid,
-                          ),
-                        ),
-                        child: Column(
-                          children: [
-                            Icon(Icons.upload_file,
-                                size: 36,
-                                color: Theme.of(ctx).colorScheme.primary),
-                            const SizedBox(height: 8),
-                            Text(
-                              fileName == null
-                                  ? 'TXT dosyası ekleme boşluğu'
-                                  : fileName!,
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.w600),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              fileName == null
-                                  ? 'Tıklayın ve her satırda bir isim olan .txt dosyasını seçin'
-                                  : '${parseNames(rawText).length} isim okundu',
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(
-                                  fontSize: 12, color: Colors.grey),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: pasteCtrl,
-                      minLines: 3,
-                      maxLines: 6,
-                      decoration: const InputDecoration(
-                        labelText: 'veya isimleri buraya yapıştırın',
-                        hintText: 'Ahmet Yılmaz\nAyşe Demir\nMehmet Kaya',
-                        border: OutlineInputBorder(),
-                        alignLabelWithHint: true,
-                      ),
-                      onChanged: (_) => setS(() {}),
-                    ),
-                    if (names.isNotEmpty) ...[
-                      const SizedBox(height: 10),
-                      Text(
-                        'Önizleme: ${names.length} kullanıcı eklenecek',
-                        style: const TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                      const SizedBox(height: 6),
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxHeight: 120),
-                        child: ListView.builder(
-                          shrinkWrap: true,
-                          itemCount: names.length > 8 ? 8 : names.length,
-                          itemBuilder: (_, i) => Text(
-                            '• ${names[i]}',
-                            style: const TextStyle(fontSize: 13),
-                          ),
-                        ),
-                      ),
-                      if (names.length > 8)
-                        Text(
-                          '+${names.length - 8} isim daha…',
-                          style: const TextStyle(
-                              fontSize: 12, color: Colors.grey),
-                        ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('İptal'),
-              ),
-              FilledButton(
-                onPressed: () {
-                  if (companyId == null) return;
-                  final list = parseNames(
-                      pasteCtrl.text.isNotEmpty ? pasteCtrl.text : rawText);
-                  if (list.isEmpty) {
-                    showSnackBar(context,
-                        'TXT dosyası seçin veya en az bir isim girin.',
-                        error: true);
-                    return;
-                  }
-                  try {
-                    final result = bank.importUsersFromNames(
-                      names: list,
-                      companyId: companyId!,
-                    );
-                    Navigator.pop(ctx);
-                    final extra = result.skipped.isEmpty
-                        ? ''
-                        : ' ${result.skipped.length} isim atlandı.';
-                    showSnackBar(context,
-                        '${result.added} kullanıcı eklendi.$extra');
-                  } catch (e) {
-                    showSnackBar(
-                        context, e.toString().replaceAll('Exception: ', ''),
-                        error: true);
-                  }
-                },
-                child: const Text('Kullanıcıları Ekle'),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-    pasteCtrl.dispose();
-  }
-
-  void _penalty(BuildContext context, AppUser u) {
-    final ctrl = TextEditingController();
-    final reasonCtrl = TextEditingController();
-    bool isPercent = false;
-    final cur = context.read<BankProvider>().currency;
-
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setS) => AlertDialog(
-          title: Text('${u.fullName} - Ceza Uygula'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: ctrl,
-                autofocus: true,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                decoration: InputDecoration(
-                  labelText: isPercent
-                      ? 'Maaş Yüzdesi (%)'
-                      : 'Sabit Ceza Tutarı ($cur)',
-                  prefixIcon:
-                      Icon(isPercent ? Icons.percent : Icons.attach_money),
-                  border: const OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 8),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Maaş üzerinden yüzde olarak kes'),
-                value: isPercent,
-                onChanged: (v) => setS(() => isPercent = v),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: reasonCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Ceza Nedeni / Açıklama',
-                  prefixIcon: Icon(Icons.warning_amber),
-                  border: OutlineInputBorder(),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('İptal'),
-            ),
-            FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: Colors.red),
-              onPressed: () {
-                final raw = ctrl.text.trim().replaceAll(',', '.');
-                final v = double.tryParse(raw);
-                if (v == null || v <= 0) {
-                  showSnackBar(
-                      context, 'Lütfen geçerli ve pozitif bir değer girin.',
-                      error: true);
-                  return;
-                }
-                if (isPercent && v > 100) {
-                  showSnackBar(context, 'Yüzde 100\'den fazla olamaz.',
-                      error: true);
-                  return;
-                }
-
-                try {
-                  context.read<BankProvider>().applyPenalty(
-                        u.id,
-                        v,
-                        reasonCtrl.text.isEmpty
-                            ? 'Disiplin cezası'
-                            : reasonCtrl.text.trim(),
-                        percentage: isPercent,
-                      );
-                  Navigator.pop(ctx);
-                  showSnackBar(context, 'Ceza başarıyla uygulandı.');
-                } catch (e) {
-                  showSnackBar(
-                      context, e.toString().replaceAll('Exception: ', ''),
-                      error: true);
-                }
-              },
-              child: const Text('Cezayı Uygula'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _promote(BuildContext context, AppUser u) {
-    final titleCtrl = TextEditingController(text: u.title);
-    final salaryCtrl =
-        TextEditingController(text: (u.salary * 1.2).toStringAsFixed(0));
-    final bonusCtrl = TextEditingController(text: '0');
-    final cur = context.read<BankProvider>().currency;
-
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('${u.fullName} - Terfi'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: titleCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Yeni Unvan',
-                  prefixIcon: Icon(Icons.badge_outlined),
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: salaryCtrl,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                decoration: InputDecoration(
-                  labelText: 'Yeni Aylık Maaş ($cur)',
-                  prefixIcon: const Icon(Icons.attach_money),
-                  border: const OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: bonusCtrl,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                decoration: InputDecoration(
-                  labelText: 'Terfi Primi (Opsiyonel $cur)',
-                  prefixIcon: const Icon(Icons.card_giftcard),
-                  border: const OutlineInputBorder(),
-                ),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('İptal'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final newTitle = titleCtrl.text.trim();
-              final rawSalary = salaryCtrl.text.trim().replaceAll(',', '.');
-              final rawBonus = bonusCtrl.text.trim().replaceAll(',', '.');
-              final s = double.tryParse(rawSalary);
-              final b = double.tryParse(rawBonus) ?? 0;
-
-              if (newTitle.isEmpty) {
-                showSnackBar(context, 'Unvan boş bırakılamaz.', error: true);
-                return;
-              }
-              if (s == null || s < 0) {
-                showSnackBar(context, 'Geçerli bir yeni maaş girin.',
-                    error: true);
-                return;
-              }
-              if (b < 0) {
-                showSnackBar(context, 'Terfi primi negatif olamaz.',
-                    error: true);
-                return;
-              }
-
-              try {
-                context.read<BankProvider>().promote(u.id, newTitle, s, b);
-                Navigator.pop(ctx);
-                showSnackBar(
-                    context, '${u.fullName} terfi ettirildi ($newTitle).');
-              } catch (e) {
-                showSnackBar(
-                    context, e.toString().replaceAll('Exception: ', ''),
-                    error: true);
-              }
-            },
-            child: const Text('Terfi Ettir'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _transfer(BuildContext context, AppUser u) {
-    final bank = context.read<BankProvider>();
-    final cur = bank.currency;
-    final otherCompanies =
-        bank.companies.where((c) => c.id != u.companyId).toList();
-
-    if (otherCompanies.isEmpty) {
-      showSnackBar(
-          context, 'Transfer edilebilecek başka bir şirket bulunmuyor.',
-          error: true);
-      return;
-    }
-
-    String? targetId = otherCompanies.first.id;
-
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setS) => AlertDialog(
-          title: Text('${u.fullName} - Şirket Değiştir'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (u.contractEnd.isAfter(DateTime.now()) &&
-                  u.terminationFee > 0)
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  margin: const EdgeInsets.only(bottom: 16),
-                  decoration: BoxDecoration(
-                    color: Colors.orange.withAlpha(38),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.orange),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.info_outline,
-                          color: Colors.orange, size: 20),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Sözleşme henüz dolmadı. Çalışandan ${money(u.terminationFee, cur)} fesih tazminatı kesilecektir.',
-                          style: const TextStyle(
-                              fontSize: 12, color: Colors.orange),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              DropdownButtonFormField<String>(
-                value: targetId,
-                decoration: const InputDecoration(
-                  labelText: 'Hedef Şirket',
-                  prefixIcon: Icon(Icons.business),
-                  border: OutlineInputBorder(),
-                ),
-                items: otherCompanies
-                    .map((c) =>
-                        DropdownMenuItem(value: c.id, child: Text(c.name)))
-                    .toList(),
-                onChanged: (v) => setS(() => targetId = v),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('İptal'),
-            ),
-            FilledButton(
-              onPressed: () {
-                if (targetId == null) return;
-                try {
-                  bank.transferEmployee(u.id, targetId!);
-                  Navigator.pop(ctx);
-                  showSnackBar(context, 'Çalışan başarıyla transfer edildi.');
-                } catch (e) {
-                  showSnackBar(
-                      context, e.toString().replaceAll('Exception: ', ''),
-                      error: true);
-                }
-              },
-              child: const Text('Transfer Et'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _renewContract(BuildContext context, AppUser u) {
-    final monthsCtrl = TextEditingController(text: '12');
-    final feeCtrl =
-        TextEditingController(text: u.terminationFee.toStringAsFixed(0));
-    final cur = context.read<BankProvider>().currency;
-
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('${u.fullName} - Sözleşme Yenile'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: monthsCtrl,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'Uzatma Süresi (Ay)',
-                prefixIcon: Icon(Icons.calendar_month),
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: feeCtrl,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-              decoration: InputDecoration(
-                labelText: 'Erken Fesih Ücreti ($cur)',
-                prefixIcon: const Icon(Icons.attach_money),
-                border: const OutlineInputBorder(),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('İptal'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final m = int.tryParse(monthsCtrl.text);
-              final rawFee = feeCtrl.text.trim().replaceAll(',', '.');
-              final f = double.tryParse(rawFee);
-
-              if (m == null || m <= 0) {
-                showSnackBar(
-                    context, 'Sözleşme süresi en az 1 ay olmalıdır.',
-                    error: true);
-                return;
-              }
-              if (f == null || f < 0) {
-                showSnackBar(context, 'Fesih ücreti negatif olamaz.',
-                    error: true);
-                return;
-              }
-
-              try {
-                context.read<BankProvider>().renewContract(u.id, m, f);
-                Navigator.pop(ctx);
-                showSnackBar(context, 'Sözleşme $m ay uzatıldı.');
-              } catch (e) {
-                showSnackBar(
-                    context, e.toString().replaceAll('Exception: ', ''),
-                    error: true);
-              }
-            },
-            child: const Text('Yenile'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showHistory(BuildContext context, AppUser u) {
-    final bank = context.read<BankProvider>();
-    final txns = bank.txnsOfUser(u.id);
-    final cur = bank.currency;
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (ctx) => DraggableScrollableSheet(
-        expand: false,
-        initialChildSize: 0.75,
-        maxChildSize: 0.95,
-        minChildSize: 0.4,
-        builder: (ctx, scroll) => Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-              child: Row(
-                children: [
-                  const Icon(Icons.person, color: Colors.indigo),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      '${u.fullName} - İşlem Geçmişi',
-                      style: Theme.of(ctx).textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const Divider(),
-            Expanded(
-              child: txns.isEmpty
-                  ? const Center(
-                      child: Text(
-                        'Bu kullanıcıya ait kayıtlı bir işlem bulunmuyor.',
-                        style: TextStyle(color: Colors.grey),
-                      ),
-                    )
-                  : ListView.separated(
-                      controller: scroll,
-                      itemCount: txns.length,
-                      separatorBuilder: (_, __) => const Divider(height: 1),
-                      itemBuilder: (c, i) {
-                        final t = txns[i];
-                        final isIncoming = t.toId == u.id && t.fromId != u.id;
-                        final isZero = t.amount == 0;
-
-                        return ListTile(
-                          leading: CircleAvatar(
-                            backgroundColor:
-                                TxnIcon.colorOf(t.type).withAlpha(38),
-                            child: Icon(
-                              TxnIcon.of(t.type),
-                              color: TxnIcon.colorOf(t.type),
-                              size: 20,
-                            ),
-                          ),
-                          title: Text(
-                            t.type.label,
-                            style: const TextStyle(fontWeight: FontWeight.w600),
-                          ),
-                          subtitle: Text(
-                            '${t.description}\n${DateFormat('dd.MM.yyyy HH:mm').format(t.date)}',
-                            style: const TextStyle(fontSize: 12),
-                          ),
-                          isThreeLine: true,
-                          trailing: Text(
-                            isZero
-                                ? money(0, cur)
-                                : '${isIncoming ? '+' : '-'}${money(t.amount, cur)}',
-                            style: TextStyle(
-                              color: isZero
-                                  ? Colors.grey
-                                  : (isIncoming ? Colors.green : Colors.red),
-                              fontWeight: FontWeight.bold,
-                              fontSize: 14,
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _addUser(BuildContext context) {
-    final bank = context.read<BankProvider>();
-    final nameCtrl = TextEditingController();
-    final salaryCtrl = TextEditingController(text: '30000');
-    final feeCtrl = TextEditingController(text: '60000');
-    final salaryDayCtrl =
-        TextEditingController(text: bank.settings.salaryDay.toString());
-    final contractMonthsCtrl = TextEditingController(text: '12');
-
-    String? selectedCompanyId =
-        bank.companies.isNotEmpty ? bank.companies.first.id : null;
-    final cur = bank.currency;
-
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setS) {
-          final selected = selectedCompanyId == null
-              ? null
-              : bank.companyById(selectedCompanyId);
-          return AlertDialog(
-            title: const Text('Yeni Çalışan Ekle'),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextField(
-                    controller: nameCtrl,
-                    autofocus: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Ad Soyad',
-                      prefixIcon: Icon(Icons.person),
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  DropdownButtonFormField<String?>(
-                    value: selectedCompanyId,
-                    decoration: const InputDecoration(
-                      labelText: 'Bağlı Olacağı Şirket',
-                      prefixIcon: Icon(Icons.business),
-                      border: OutlineInputBorder(),
-                    ),
-                    items: [
-                      const DropdownMenuItem<String?>(
-                        value: null,
-                        child: Text('Şirketsiz / Bağımsız'),
-                      ),
-                      ...bank.companies.map((c) => DropdownMenuItem<String?>(
-                            value: c.id,
-                            child: Text(c.name),
-                          )),
-                    ],
-                    onChanged: (v) {
-                      setS(() {
-                        selectedCompanyId = v;
-                        final c = v == null ? null : bank.companyById(v);
-                        if (c != null && c.salaryLimit > 0) {
-                          final suggested =
-                              (c.salaryLimit * 0.8).round().toString();
-                          salaryCtrl.text = suggested;
-                          feeCtrl.text =
-                              ((c.salaryLimit * 0.8) * 2).round().toString();
-                        }
-                      });
-                    },
-                  ),
-                  if (selected != null) ...[
-                    const SizedBox(height: 8),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        'Şirket maaş sınırı: ${money(selected.salaryLimit, cur)}',
-                        style:
-                            const TextStyle(fontSize: 12, color: Colors.grey),
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: salaryCtrl,
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
-                    decoration: InputDecoration(
-                      labelText: 'Aylık Maaş ($cur)',
-                      prefixIcon: const Icon(Icons.attach_money),
-                      border: const OutlineInputBorder(),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: salaryDayCtrl,
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(
-                            labelText: 'Maaş Günü (1-31)',
-                            border: OutlineInputBorder(),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: TextField(
-                          controller: contractMonthsCtrl,
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(
-                            labelText: 'Sözleşme (Ay)',
-                            border: OutlineInputBorder(),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: feeCtrl,
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
-                    decoration: InputDecoration(
-                      labelText: 'Fesih Tazminatı ($cur)',
-                      prefixIcon: const Icon(Icons.security),
-                      border: const OutlineInputBorder(),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('İptal'),
-              ),
-              FilledButton(
-                onPressed: () {
-                  final name = nameCtrl.text.trim();
-                  final rawSalary =
-                      salaryCtrl.text.trim().replaceAll(',', '.');
-                  final rawFee = feeCtrl.text.trim().replaceAll(',', '.');
-                  final salary = double.tryParse(rawSalary);
-                  final fee = double.tryParse(rawFee);
-                  final sDay = int.tryParse(salaryDayCtrl.text) ?? 1;
-                  final cMonths = int.tryParse(contractMonthsCtrl.text) ?? 12;
-
-                  if (name.isEmpty) {
-                    showSnackBar(context, 'Ad Soyad boş bırakılamaz.',
-                        error: true);
-                    return;
-                  }
-                  if (salary == null || salary < 0) {
-                    showSnackBar(context, 'Geçerli bir maaş girin.',
-                        error: true);
-                    return;
-                  }
-                  if (fee == null || fee < 0) {
-                    showSnackBar(context, 'Fesih tazminatı negatif olamaz.',
-                        error: true);
-                    return;
-                  }
-                  if (sDay < 1 || sDay > 31) {
-                    showSnackBar(
-                        context, 'Maaş günü 1 ile 31 arasında olmalıdır.',
-                        error: true);
-                    return;
-                  }
-                  if (cMonths < 1) {
-                    showSnackBar(
-                        context, 'Sözleşme süresi en az 1 ay olmalıdır.',
-                        error: true);
-                    return;
-                  }
-
-                  final now = DateTime.now();
-                  try {
-                    bank.addUser(
-                      fullName: name,
-                      role: UserRole.employee,
-                      companyId: selectedCompanyId,
-                      salary: salary,
-                      salaryDate: DateTime(
-                          now.year, now.month, sDay.clamp(1, 28)),
-                      contractEnd: now.add(Duration(days: cMonths * 30)),
-                      terminationFee: fee,
-                    );
-                    Navigator.pop(ctx);
-                    showSnackBar(
-                        context, '"$name" adlı çalışan oluşturuldu.');
-                  } catch (e) {
-                    showSnackBar(
-                        context, e.toString().replaceAll('Exception: ', ''),
-                        error: true);
-                  }
-                },
-                child: const Text('Oluştur'),
-              ),
-            ],
-          );
-        },
       ),
     );
   }
