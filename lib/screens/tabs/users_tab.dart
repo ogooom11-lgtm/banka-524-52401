@@ -6,7 +6,6 @@ import '../../utils/formatters.dart';
 import '../../widgets/animated_widgets.dart';
 import '../../widgets/app_dialogs.dart';
 import '../../widgets/common.dart';
-import '../../widgets/responsive.dart';
 import '../dialogs/import_export_dialogs.dart';
 import '../dialogs/user_dialogs.dart';
 

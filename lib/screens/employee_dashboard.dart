@@ -62,8 +62,8 @@ class _EmployeeDashboardState extends State<EmployeeDashboard> {
           Icons.request_quote, _loans(bank, user)),
       _PortalSection(
           'Profil', Icons.person_outline, Icons.person, _profile(bank, user)),
-      _PortalSection('Nasıl Çalışır?', Icons.help_outline, Icons.help,
-          const HelpTab()),
+      const _PortalSection('Nasıl Çalışır?', Icons.help_outline, Icons.help,
+          HelpTab()),
     ];
     final safeIndex = _index.clamp(0, items.length - 1);
     final showSidebar = MediaQuery.of(context).size.width >= 900;

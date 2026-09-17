@@ -312,10 +312,10 @@ class AppTheme {
         linearTrackColor: scheme.primary.withValues(alpha: 0.15),
         circularTrackColor: scheme.primary.withValues(alpha: 0.15),
       ),
-      sliderTheme: SliderThemeData(
+      sliderTheme: const SliderThemeData(
         trackHeight: 6,
-        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 9),
-        overlayShape: const RoundSliderOverlayShape(overlayRadius: 18),
+        thumbShape: RoundSliderThumbShape(enabledThumbRadius: 9),
+        overlayShape: RoundSliderOverlayShape(overlayRadius: 18),
       ),
       switchTheme: SwitchThemeData(
         thumbColor: WidgetStateProperty.resolveWith((states) {

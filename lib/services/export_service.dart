@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
@@ -28,13 +27,13 @@ class TextFileOutcome extends FileOutcome {
   final String? fileName;
 
   const TextFileOutcome({
-    required bool ok,
-    bool cancelled = false,
-    String? path,
-    String? message,
+    required super.ok,
+    super.cancelled,
+    super.path,
+    super.message,
     this.content,
     this.fileName,
-  }) : super(ok: ok, cancelled: cancelled, path: path, message: message);
+  });
 }
 
 /// CSV / JSON / TXT içe-dışa aktarma yardımcıları (dart:io kullanmaz, web + Windows uyumlu).

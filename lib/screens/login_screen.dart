@@ -5,7 +5,6 @@ import '../providers/bank_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/animated_widgets.dart';
 import '../widgets/common.dart';
-import '../widgets/responsive.dart';
 import 'help_screen.dart';
 
 /// Giriş ekranı — yönetici veya çalışan portalı.

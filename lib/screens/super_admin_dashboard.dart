@@ -57,73 +57,81 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
   }
 
   // ------------------------------------------------------------ Sekmeler
-  List<_NavItem> _items(BankProvider bank) => [
-        _NavItem(
-          'overview',
-          'Genel Bakış',
-          Icons.dashboard_outlined,
-          Icons.dashboard,
-          OverviewTab(onNavigate: _goTo),
-          enabled: true,
-        ),
-        _NavItem(
-          'companies',
-          'Şirketler',
-          Icons.business_outlined,
-          Icons.business,
-          const CompaniesTab(),
-          enabled: bank.settings.moduleEnabled('companies'),
-        ),
-        _NavItem(
-          'users',
-          'Kullanıcılar',
-          Icons.people_outline,
-          Icons.people,
-          UsersTab(key: _usersKey),
-          enabled: bank.settings.moduleEnabled('users'),
-        ),
-        _NavItem(
-          'payroll',
-          'Maaş Merkezi',
-          Icons.payments_outlined,
-          Icons.payments,
-          PayrollTab(onNavigate: _goTo),
-          enabled: bank.settings.moduleEnabled('payroll'),
-        ),
-        _NavItem(
-          'transactions',
-          'İşlemler',
-          Icons.receipt_long_outlined,
-          Icons.receipt_long,
-          const TransactionsTab(),
-          enabled: bank.settings.moduleEnabled('transactions'),
-        ),
-        _NavItem(
-          'reports',
-          'Raporlar',
-          Icons.insights_outlined,
-          Icons.insights,
-          const ReportsTab(),
-          enabled: bank.settings.moduleEnabled('reports'),
-        ),
-        _NavItem(
-          'help',
-          'Nasıl Çalışır?',
-          Icons.help_outline,
-          Icons.help,
-          const HelpTab(),
-          enabled: bank.settings.moduleEnabled('help'),
-        ),
-        _NavItem(
-          'settings',
-          'Ayarlar',
-          Icons.settings_outlined,
-          Icons.settings,
-          SettingsTab(onNavigate: _goTo),
-          enabled: true,
-        ),
-      ];
-
+  List<_NavItem> _items(BankProvider bank) {
+    final now = DateTime.now();
+    final dueSalaries = bank.payableEmployees
+        .where((u) => !u.salaryDate.isAfter(now))
+        .length;
+    final riskCount = bank.riskyContracts.length;
+    return [
+      _NavItem(
+        'overview',
+        'Genel Bakış',
+        Icons.dashboard_outlined,
+        Icons.dashboard,
+        OverviewTab(onNavigate: _goTo),
+        enabled: true,
+      ),
+      _NavItem(
+        'companies',
+        'Şirketler',
+        Icons.business_outlined,
+        Icons.business,
+        const CompaniesTab(),
+        enabled: bank.settings.moduleEnabled('companies'),
+      ),
+      _NavItem(
+        'users',
+        'Kullanıcılar',
+        Icons.people_outline,
+        Icons.people,
+        UsersTab(key: _usersKey),
+        enabled: bank.settings.moduleEnabled('users'),
+        badge: riskCount,
+      ),
+      _NavItem(
+        'payroll',
+        'Maaş Merkezi',
+        Icons.payments_outlined,
+        Icons.payments,
+        PayrollTab(onNavigate: _goTo),
+        enabled: bank.settings.moduleEnabled('payroll'),
+        badge: dueSalaries,
+      ),
+      _NavItem(
+        'transactions',
+        'İşlemler',
+        Icons.receipt_long_outlined,
+        Icons.receipt_long,
+        const TransactionsTab(),
+        enabled: bank.settings.moduleEnabled('transactions'),
+      ),
+      _NavItem(
+        'reports',
+        'Raporlar',
+        Icons.insights_outlined,
+        Icons.insights,
+        const ReportsTab(),
+        enabled: bank.settings.moduleEnabled('reports'),
+      ),
+      _NavItem(
+        'help',
+        'Nasıl Çalışır?',
+        Icons.help_outline,
+        Icons.help,
+        const HelpTab(),
+        enabled: bank.settings.moduleEnabled('help'),
+      ),
+      _NavItem(
+        'settings',
+        'Ayarlar',
+        Icons.settings_outlined,
+        Icons.settings,
+        SettingsTab(onNavigate: _goTo),
+        enabled: true,
+      ),
+    ];
+  }
   void _select(int index) {
     final items = _items(context.read<BankProvider>());
     if (index < 0 || index >= items.length) return;
@@ -732,7 +740,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                   '${bank.transactions.length} işlem • ${bank.users.length} kullanıcı • '
                   '${bank.companies.length} şirket',
                   overflow: TextOverflow.ellipsis,
-                  style: TextView(scheme),
+                  style: _statusTextStyle(scheme),
                 ),
               ),
               if (!compact) ...[
@@ -748,20 +756,20 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
                   const Icon(Icons.verified_outlined,
                       size: 14, color: Color(0xFF22C55E)),
                   const SizedBox(width: 5),
-                  Text('riskli sözleşme yok', style: TextView(scheme)),
+                  Text('riskli sözleşme yok', style: _statusTextStyle(scheme)),
                 ],
               ],
               const Spacer(),
               if (!compact) ...[
                 Text(
                   'Vadesi gelen maaş: ${bank.payableEmployees.where((u) => !u.salaryDate.isAfter(DateTime.now())).length}',
-                  style: TextView(scheme),
+                  style: _statusTextStyle(scheme),
                 ),
                 const SizedBox(width: 16),
               ],
               Icon(Icons.schedule, size: 13, color: scheme.outline),
               const SizedBox(width: 5),
-              Text(Fmt.clock(DateTime.now()), style: TextView(scheme)),
+              Text(Fmt.clock(DateTime.now()), style: _statusTextStyle(scheme)),
             ],
           );
         },
@@ -771,7 +779,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard> {
 }
 
 /// Durum çubuğu metin stili.
-TextStyle TextView(ColorScheme scheme) => TextStyle(
+TextStyle _statusTextStyle(ColorScheme scheme) => TextStyle(
       fontSize: 11,
       color: scheme.onSurfaceVariant,
     );

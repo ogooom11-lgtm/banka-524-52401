@@ -298,7 +298,7 @@ class _DonutPainter extends CustomPainter {
     if (total <= 0) return;
 
     var startAngle = -math.pi / 2;
-    final gap = 0.035;
+    const gap = 0.035;
     for (final slice in slices) {
       final sweep = (slice.value / total) * (2 * math.pi) * progress;
       if (sweep <= 0) continue;

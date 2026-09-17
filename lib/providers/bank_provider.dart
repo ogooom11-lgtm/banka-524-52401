@@ -760,6 +760,7 @@ class BankProvider extends ChangeNotifier {
     String contactPhone = '',
     int colorValue = 0,
     String notes = '',
+    bool isActive = true,
     bool persist = true,
   }) {
     final cleanName = name.trim();
@@ -1917,10 +1918,10 @@ class BankProvider extends ChangeNotifier {
 
     final monthLabel = DateFormat('MMMM yyyy', 'tr_TR').format(DateTime.now());
     addTxn(TxnType.salary, gross, c.id, u.id,
-        '${monthLabel} maaş ödemesi${tax > 0 ? ' (brüt)' : ''}');
+        '$monthLabel maaş ödemesi${tax > 0 ? ' (brüt)' : ''}');
     if (tax > 0) {
       addTxn(TxnType.tax, tax, u.id, 'BANK',
-          '${monthLabel} gelir vergisi (%${settings.taxPercent.toStringAsFixed(0)})');
+          '$monthLabel gelir vergisi (%${settings.taxPercent.toStringAsFixed(0)})');
     }
     log('Maaş ödendi',
         detail: '${u.fullName} • net ${money(net)}${tax > 0 ? ' • vergi ${money(tax)}' : ''}',
@@ -2348,7 +2349,7 @@ class BankProvider extends ChangeNotifier {
 
   /// Ayarlardaki gün sayısına göre süresi yaklaşan sözleşmeleri bildirir.
   int checkContractAlerts() {
-    final soon = riskyContracts();
+    final soon = riskyContractsList();
     if (soon.isEmpty) return 0;
     final alreadyNotified = _notifications
         .where((n) =>

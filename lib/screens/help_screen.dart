@@ -129,7 +129,6 @@ class _HelpScreenState extends State<HelpScreen> {
       _query.isEmpty || text.toLowerCase().contains(_query);
 
   Widget _hero(BuildContext context, BankProvider bank, AccentPreset preset) {
-    final scheme = Theme.of(context).colorScheme;
     return FadeSlideIn(
       child: Container(
         width: double.infinity,
